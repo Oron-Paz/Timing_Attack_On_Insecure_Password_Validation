@@ -5,10 +5,16 @@ from concurrent.futures import ThreadPoolExecutor
 from scipy import stats
 import numpy as np
 from typing import List, Optional, Tuple
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+ID = os.getenv("ID")
 
 # Configuration
 SERVER_URL = "http://127.0.0.1"
-USER_ID = "326647914"
+USER_ID = ID  # Replace with your ID/username
 DIFFICULTY = 4
 CHARACTERS = "abcdefghijklmnopqrstuvwxyz"
 RETRIES = 300

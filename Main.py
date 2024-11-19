@@ -3,14 +3,20 @@ import requests
 from statistics import median
 from scipy.stats import ttest_ind
 from concurrent.futures import ThreadPoolExecutor
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+ID = os.getenv("ID")
 
 # Configuration
 SERVER_URL = "http://127.0.0.1"
-USER_ID = "123456789"  # Replace with your ID/username
-DIFFICULTY = 1         # Adjust difficulty
+USER_ID = ID  # Replace with your ID/username
+DIFFICULTY = 4         # Adjust difficulty
 CHARACTERS = "abcdefghijklmnopqrstuvwxyz"
-RETRIES = 100         # Number of measurements per character (we take the median to mitigate outliers)
-WORKERS = 20           # Number of concurrent threads (if this number is too high the code goes crazy, i believe its too many request for the server at the same time)
+RETRIES = 150         # Number of measurements per character (we take the median to mitigate outliers)
+WORKERS = 25           # Number of concurrent threads (if this number is too high the code goes crazy, i believe its too many request for the server at the same time)
 # keep workers low , WORKERS < (1/2 * RETRIES - 5) or so to keep the server from crashing
 
 
